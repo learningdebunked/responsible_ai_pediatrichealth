@@ -1,0 +1,114 @@
+# RetailHealth Default Configuration
+
+# Data Generation
+data:
+  n_families: 100000
+  age_range: [0, 6]
+  delay_prevalence: 0.15
+  delay_types:
+    language: 0.06
+    motor: 0.02
+    asd: 0.015
+    adhd: 0.04
+  months_history: 24
+  seed: 42
+  
+# DevelopMap Taxonomy
+taxonomy:
+  domains:
+    - fine_motor
+    - gross_motor
+    - language
+    - social_emotional
+    - sensory
+    - adaptive
+    - sleep
+    - feeding
+    - behavioral
+    - therapeutic
+  embedding_model: "sentence-transformers/all-MiniLM-L6-v2"
+  use_embeddings: true
+  keyword_weight: 0.3
+  embedding_weight: 0.7
+
+# Privacy
+privacy:
+  epsilon: 0.5
+  delta: 1.0e-5
+  clip_norm: 1.0
+  noise_multiplier: 1.1
+  secure_aggregation: true
+  max_grad_norm: 1.0
+
+# Federated Learning
+federated:
+  n_clients: 10
+  rounds: 100
+  local_epochs: 5
+  batch_size: 32
+  learning_rate: 0.001
+  sampling_rate: 0.1
+  aggregation: "FedAvg"  # FedAvg or FedProx
+  mu: 0.01  # FedProx parameter
+  min_fit_clients: 5
+  min_available_clients: 8
+
+# Model Architecture
+model:
+  type: "transformer"  # transformer, gru, or lstm
+  hidden_size: 128
+  num_layers: 4
+  num_heads: 8
+  dropout: 0.1
+  max_sequence_length: 24
+  input_size: 10  # Number of DevelopMap domains
+
+# Training
+training:
+  optimizer: "adam"
+  weight_decay: 0.0001
+  scheduler: "cosine"
+  warmup_steps: 100
+  gradient_accumulation: 1
+  mixed_precision: true
+  early_stopping_patience: 10
+
+# Evaluation
+evaluation:
+  metrics:
+    - auroc
+    - precision
+    - recall
+    - f1
+    - lead_time
+  fairness_groups:
+    - income_quintile
+    - geography
+    - ethnicity
+  threshold: 0.5
+  bootstrap_samples: 1000
+
+# Causal Inference
+causal:
+  propensity_method: "logistic"  # logistic, rf, or gbm
+  matching_method: "nearest"  # nearest, caliper, or optimal
+  sensitivity_analysis: true
+  granger_lags: 3
+  caliper: 0.1
+
+# Deployment
+deployment:
+  api_latency_ms: 250
+  cache_ttl_hours: 24
+  batch_inference: true
+  monitoring:
+    log_level: "INFO"
+    metrics_port: 9090
+    enable_profiling: false
+
+# Paths
+paths:
+  data_dir: "data"
+  model_dir: "models"
+  results_dir: "results"
+  logs_dir: "logs"
