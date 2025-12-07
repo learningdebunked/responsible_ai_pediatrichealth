@@ -39,6 +39,7 @@ click>=8.0.0
 # Testing
 pytest>=7.0.0
 pytest-cov>=3.0.0
+hypothesis>=6.0.0
 
 # Development
 black>=22.0.0
