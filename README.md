@@ -253,8 +253,8 @@ We welcome contributions! Please:
 ## Contact
 
 - **Author**: Kapil Poreddy
-- **Email**: kapilporeddy@researchmail.org
-- **Repository**: https://github.com/username/retailhealth-framework
+- **Email**: poreddykapil@ieee.org
+- **Repository**: https://github.com/learningdebunked/responsible_ai_pediatrichealth
 
 ## Acknowledgments
 
