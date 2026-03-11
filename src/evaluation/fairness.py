@@ -339,3 +339,247 @@ def check_fairness_thresholds(fairness_results: Dict[str, Dict],
             )
     
     return len(violations) == 0, violations
+
+
+class SelectionBiasAnalyzer:
+    """Analyze selection bias in the training population.
+
+    Estimates how the population captured by retail purchase data
+    differs from the general pediatric population, identifies
+    coverage gaps, and models the impact of missing populations
+    on model fairness.
+    """
+
+    def __init__(self, reference_prevalence: Dict[str, Dict[str, float]] = None):
+        """Initialize selection bias analyzer.
+
+        Args:
+            reference_prevalence: Reference population prevalence rates
+                from NSCH or similar survey, structured as:
+                {attribute: {group: prevalence_rate}}
+                If None, uses NSCH 2022 defaults.
+        """
+        if reference_prevalence is None:
+            self.reference = {
+                'income_quintile': {
+                    '1': 0.223, '2': 0.198, '3': 0.172,
+                    '4': 0.151, '5': 0.124,
+                },
+                'geography': {
+                    'urban': 0.165, 'suburban': 0.172, 'rural': 0.201,
+                },
+                'ethnicity': {
+                    'white': 0.172, 'black': 0.198, 'hispanic': 0.185,
+                    'asian': 0.142, 'other': 0.189,
+                },
+            }
+        else:
+            self.reference = reference_prevalence
+
+    def estimate_coverage_gap(
+        self,
+        observed_df: pd.DataFrame,
+        attribute: str,
+        reference_distribution: Dict[str, float] = None
+    ) -> Dict[str, Dict]:
+        """Estimate coverage gap between observed and reference populations.
+
+        Args:
+            observed_df: DataFrame with demographic columns
+            attribute: Demographic attribute to analyze
+            reference_distribution: Expected population proportions per group.
+                If None, assumes uniform.
+
+        Returns:
+            Dict mapping group to {observed_pct, reference_pct, gap,
+            coverage_ratio, underrepresented}
+        """
+        if attribute not in observed_df.columns:
+            raise ValueError(f"Attribute '{attribute}' not in DataFrame")
+
+        observed_counts = observed_df[attribute].value_counts(normalize=True)
+        all_groups = set(observed_counts.index)
+
+        if reference_distribution:
+            all_groups |= set(reference_distribution.keys())
+        else:
+            reference_distribution = {
+                g: 1.0 / len(all_groups) for g in all_groups
+            }
+
+        results = {}
+        for group in sorted(all_groups, key=str):
+            obs_pct = float(observed_counts.get(group, 0.0))
+            ref_pct = reference_distribution.get(str(group), 0.0)
+
+            coverage_ratio = obs_pct / ref_pct if ref_pct > 0 else 0.0
+
+            results[str(group)] = {
+                'observed_pct': obs_pct,
+                'reference_pct': ref_pct,
+                'gap': ref_pct - obs_pct,
+                'coverage_ratio': coverage_ratio,
+                'underrepresented': coverage_ratio < 0.8,
+            }
+
+        return results
+
+    def model_missing_populations(
+        self,
+        observed_df: pd.DataFrame,
+        y_true: np.ndarray,
+        y_pred: np.ndarray,
+        attributes: List[str] = None
+    ) -> Dict[str, Dict]:
+        """Model which populations are missing and estimate impact.
+
+        For each demographic group, computes:
+        - Representation ratio vs reference population
+        - Performance metrics for the group
+        - Estimated performance degradation due to under-representation
+
+        Args:
+            observed_df: DataFrame with demographic columns
+            y_true: True labels
+            y_pred: Predicted labels
+            attributes: Attributes to analyze. Defaults to all reference keys.
+
+        Returns:
+            Dict with per-attribute, per-group analysis
+        """
+        from sklearn.metrics import f1_score, recall_score
+
+        if attributes is None:
+            attributes = list(self.reference.keys())
+
+        results = {}
+
+        for attr in attributes:
+            if attr not in observed_df.columns:
+                continue
+
+            attr_results = {}
+            groups = observed_df[attr].unique()
+
+            for group in groups:
+                mask = observed_df[attr] == group
+                n_group = mask.sum()
+
+                if n_group < 10:
+                    continue
+
+                group_y_true = y_true[mask]
+                group_y_pred = y_pred[mask]
+
+                group_f1 = f1_score(group_y_true, group_y_pred, zero_division=0)
+                group_recall = recall_score(group_y_true, group_y_pred, zero_division=0)
+
+                # Reference prevalence
+                ref_prev = self.reference.get(attr, {}).get(str(group), None)
+
+                # Representation ratio
+                obs_pct = n_group / len(observed_df)
+                # Assume uniform reference if not specified
+                ref_pct = 1.0 / len(groups) if ref_prev is None else ref_prev
+                rep_ratio = obs_pct / ref_pct if ref_pct > 0 else 0.0
+
+                attr_results[str(group)] = {
+                    'n': int(n_group),
+                    'observed_pct': float(obs_pct),
+                    'f1': float(group_f1),
+                    'recall': float(group_recall),
+                    'representation_ratio': float(rep_ratio),
+                    'underrepresented': rep_ratio < 0.8,
+                    'performance_concern': group_f1 < 0.5 or group_recall < 0.5,
+                }
+
+            results[attr] = attr_results
+
+        return results
+
+    def generate_selection_bias_report(
+        self,
+        observed_df: pd.DataFrame,
+        y_true: np.ndarray = None,
+        y_pred: np.ndarray = None,
+        attributes: List[str] = None
+    ) -> Dict:
+        """Generate comprehensive selection bias report.
+
+        Args:
+            observed_df: DataFrame with demographic columns
+            y_true: True labels (optional, enables performance analysis)
+            y_pred: Predicted labels (optional)
+            attributes: Attributes to analyze
+
+        Returns:
+            Dict with coverage_gaps, missing_populations, and recommendations
+        """
+        if attributes is None:
+            attributes = [a for a in self.reference.keys()
+                          if a in observed_df.columns]
+
+        report = {
+            'n_total': len(observed_df),
+            'attributes_analyzed': attributes,
+            'coverage_gaps': {},
+            'recommendations': [],
+        }
+
+        # Coverage gaps
+        for attr in attributes:
+            ref_dist = self.reference.get(attr)
+            gaps = self.estimate_coverage_gap(observed_df, attr, ref_dist)
+            report['coverage_gaps'][attr] = gaps
+
+            # Check for severe under-representation
+            for group, info in gaps.items():
+                if info['underrepresented']:
+                    report['recommendations'].append(
+                        f"Group '{group}' in '{attr}' is underrepresented "
+                        f"(coverage ratio: {info['coverage_ratio']:.2f}). "
+                        f"Consider targeted data collection or reweighting."
+                    )
+
+        # Missing population analysis (if labels available)
+        if y_true is not None and y_pred is not None:
+            report['missing_populations'] = self.model_missing_populations(
+                observed_df, y_true, y_pred, attributes
+            )
+
+            # Flag performance concerns
+            for attr, groups in report['missing_populations'].items():
+                for group, info in groups.items():
+                    if info.get('performance_concern'):
+                        report['recommendations'].append(
+                            f"Performance concern for '{group}' in '{attr}': "
+                            f"F1={info['f1']:.3f}, Recall={info['recall']:.3f}. "
+                            f"Model may be unreliable for this population."
+                        )
+
+        # Print summary
+        self._print_report(report)
+
+        return report
+
+    def _print_report(self, report: Dict):
+        """Print selection bias report."""
+        print(f"\n{'='*60}")
+        print("SELECTION BIAS REPORT")
+        print(f"{'='*60}")
+        print(f"Total observations: {report['n_total']}")
+
+        for attr, gaps in report['coverage_gaps'].items():
+            print(f"\n  {attr}:")
+            for group, info in sorted(gaps.items()):
+                flag = ' ⚠' if info['underrepresented'] else ''
+                print(f"    {group:15s}: obs={info['observed_pct']:.1%}, "
+                      f"ref={info['reference_pct']:.1%}, "
+                      f"ratio={info['coverage_ratio']:.2f}{flag}")
+
+        if report.get('recommendations'):
+            print(f"\n  Recommendations:")
+            for rec in report['recommendations']:
+                print(f"    - {rec}")
+
+        print(f"{'='*60}\n")
