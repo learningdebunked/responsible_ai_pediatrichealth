@@ -5,61 +5,65 @@
 
 ## Overview
 
-RetailHealth is a privacy-preserving framework for embedding developmental screening into e-commerce platforms via federated learning. The system enables multi-retailer collaboration without sharing customer data, providing early detection of childhood developmental delays 8-14 months before typical diagnosis.
+RetailHealth is a privacy-preserving framework for embedding developmental screening into e-commerce platforms via federated learning. The system enables multi-retailer collaboration without sharing customer data, with the goal of earlier detection of childhood developmental delays.
+
+> **Honest status**: This is a research prototype. All current performance metrics are based on **synthetic data**. The synthetic generator has known circularity issues (hardcoded purchase multipliers encode the signal the model then "discovers"). We have added ablation scripts and real-data loaders to address this, but **no real-world validation has been completed yet**. See [Disclaimer](#disclaimer).
 
 ### Key Features
 
-- **Privacy-First**: Formal (ε, δ)-differential privacy guarantees with ε < 1.0
+- **Privacy-First**: Formal (ε, δ)-differential privacy with gradient inversion defense
 - **Federated Learning**: Multi-retailer collaboration without data sharing
-- **DevelopMap Taxonomy**: Universal product classification aligned with developmental domains
-- **Causal Inference**: Robust methods for irregular retail time series
-- **Equitable Performance**: TPR gap < 0.05 across demographics
-- **Production-Ready**: Scalable architecture for 10M+ daily transactions
+- **DevelopMap Taxonomy**: Product classification across 10 developmental domains with clinical citations (ASQ-3, M-CHAT-R/F, SPM, BASC-3, etc.)
+- **Temporal Analysis**: Granger-style precedence tests (explicitly *not* causal claims)
+- **Real Data Loaders**: NSCH, Consumer Expenditure Survey, Amazon Reviews 2023, PSID-CDS
+- **Fairness & Selection Bias**: `SelectionBiasAnalyzer` for coverage gap estimation
+- **Governance**: COPPA-aware consent management and hash-chained audit logs
 
 ## Quick Start
 
 ### Installation
 
 ```bash
-# Clone the repository
 git clone https://github.com/username/retailhealth-framework.git
 cd retailhealth-framework
-
-# Create virtual environment
 python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install dependencies
+source venv/bin/activate
 pip install -r requirements.txt
-
-# Install package in development mode
 pip install -e .
 ```
 
-### Generate Synthetic Data
+### Download Real Data (Recommended)
+
+```bash
+# Print download instructions for all required datasets
+python scripts/download_public_data.py --help-downloads
+
+# After downloading datasets into data/raw/, process them
+python scripts/download_public_data.py --raw_dir data/raw --output_dir data/processed
+```
+
+### Generate Synthetic Data (Fallback)
 
 ```bash
 python scripts/generate_synthetic_data.py --n_families 100000 --output_dir data/synthetic
 ```
 
-### Train Federated Model
+### Run Ablation Study
 
 ```bash
-python scripts/train_federated.py \
-  --data_dir data/synthetic \
-  --n_clients 10 \
-  --epsilon 0.5 \
-  --delta 1e-5 \
-  --output_dir models/
+python scripts/run_ablation_study.py --n_families 5000 --output_dir results/ablation
 ```
 
-### Evaluate Model
+### Validate Taxonomy
 
 ```bash
-python scripts/evaluate.py \
-  --model_path models/transformer_fl.pt \
-  --test_data data/synthetic/test.pkl \
-  --output_dir results/
+python scripts/validate_taxonomy.py --output_dir results/taxonomy
+```
+
+### Run Tests
+
+```bash
+pytest tests/ -v
 ```
 
 ## Architecture
@@ -71,28 +75,33 @@ python scripts/evaluate.py \
 └─────────────────────────────────────────────────────────────┘
                             ↓
 ┌─────────────────────────────────────────────────────────────┐
+│              Governance Layer (NEW)                          │
+│    (Consent Manager, Audit Logger, COPPA Compliance)       │
+└─────────────────────────────────────────────────────────────┘
+                            ↓
+┌─────────────────────────────────────────────────────────────┐
 │                    Privacy Layer                             │
-│    (Local Features, DP Noise, Secure Aggregation)          │
+│  (DP Noise, Secure Aggregation, Gradient Inversion Defense)│
 └─────────────────────────────────────────────────────────────┘
                             ↓
 ┌─────────────────────────────────────────────────────────────┐
 │                   Feature Layer                              │
-│  (DevelopMap, Temporal Encoder, Age Baselines)             │
+│  (DevelopMap, Temporal Encoder, Age Baselines)              │
 └─────────────────────────────────────────────────────────────┘
                             ↓
 ┌─────────────────────────────────────────────────────────────┐
 │              Federated Learning Layer                        │
-│         (FedAvg/FedProx + Privacy Accounting)              │
+│    (FedAvg/FedProx + Rényi DP Accounting)                  │
 └─────────────────────────────────────────────────────────────┘
                             ↓
 ┌─────────────────────────────────────────────────────────────┐
-│              Causal Inference Layer                          │
-│    (Temporal Discovery, Counterfactuals, PSM)              │
+│          Temporal Analysis Layer (renamed from causal)       │
+│  (Granger Precedence, Counterfactuals, Sensitivity)        │
 └─────────────────────────────────────────────────────────────┘
                             ↓
 ┌─────────────────────────────────────────────────────────────┐
-│              Clinical Interface Layer                        │
-│      (Risk Scores, XAI, Opt-in Notifications)              │
+│              Evaluation Layer                                │
+│  (Fairness, Selection Bias, Trajectory Stability)          │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -101,136 +110,102 @@ python scripts/evaluate.py \
 ```
 retailhealth-framework/
 ├── README.md
+├── CHANGELOG.md
 ├── LICENSE
 ├── requirements.txt
 ├── setup.py
+├── configs/
+│   └── default.yaml             # NSCH-updated prevalence rates
 ├── src/
-│   ├── taxonomy/          # DevelopMap product taxonomy
-│   ├── data/              # Data generation and preprocessing
-│   ├── privacy/           # Differential privacy mechanisms
-│   ├── features/          # Feature engineering pipeline
-│   ├── federated/         # Federated learning implementation
-│   ├── causal/            # Causal inference methods
-│   ├── evaluation/        # Metrics and fairness analysis
-│   └── utils/             # Configuration and utilities
-├── scripts/               # Training and evaluation scripts
-├── tests/                 # Unit tests
-├── notebooks/             # Jupyter notebooks for analysis
-├── configs/               # Configuration files
-└── docs/                  # Documentation
+│   ├── taxonomy/                # DevelopMap with clinical citations
+│   │   ├── developmap.py        # 10 domains + validate_against_asq3()
+│   │   └── classifier.py       # ProductClassifier + calibrate()
+│   ├── data/
+│   │   ├── synthetic_generator.py  # Noisy multipliers, household fields
+│   │   ├── nsch_loader.py       # NSCH microdata loader
+│   │   ├── ce_loader.py         # Consumer Expenditure Survey loader
+│   │   ├── amazon_product_loader.py  # Amazon Reviews 2023 loader
+│   │   └── psid_loader.py       # PSID-CDS loader
+│   ├── privacy/
+│   │   ├── dp_mechanisms.py     # DP + GradientInversionDefense
+│   │   └── secure_aggregation.py  # Dropped-client handling + integrity
+│   ├── features/                # Temporal encoding
+│   ├── federated/               # FL client, server, models
+│   ├── temporal_analysis/       # Renamed from causal/
+│   │   ├── temporal_discovery.py  # TemporalAssociationAnalyzer
+│   │   ├── propensity.py        # Propensity score methods
+│   │   └── counterfactual.py    # Counterfactual + sensitivity analysis
+│   ├── evaluation/
+│   │   ├── metrics.py           # + trajectory stability, NSCH lead time
+│   │   └── fairness.py          # + SelectionBiasAnalyzer
+│   ├── governance/              # NEW
+│   │   ├── consent.py           # COPPA-aware consent manager
+│   │   └── audit.py             # Hash-chained audit logger
+│   └── utils/
+├── scripts/
+│   ├── download_public_data.py  # Real data processing pipeline
+│   ├── run_ablation_study.py    # 5-experiment ablation
+│   └── validate_taxonomy.py     # ASQ-3 + Amazon validation
+├── tests/
+│   ├── test_taxonomy.py
+│   ├── test_synthetic.py
+│   ├── test_privacy.py
+│   ├── test_evaluation.py
+│   └── test_governance.py
+├── notebooks/
+├── data/
+│   ├── raw/                     # Downloaded public datasets
+│   ├── processed/               # Processed outputs
+│   └── synthetic/               # Generated synthetic data
+└── docs/
 ```
-
-## Performance
-
-### Model Performance (Synthetic Data, n=20,000)
-
-| Delay Type | Model | AUROC | Precision | Recall | F1 | Lead Time (mo) |
-|------------|-------|-------|-----------|--------|----|-----------------|
-| Language | Trans-FL | 0.79 | 0.71 | 0.76 | 0.73 | 11.3 ± 2.5 |
-| Motor | Trans-FL | 0.74 | 0.67 | 0.71 | 0.69 | 9.8 ± 2.6 |
-| ASD | Trans-FL | 0.84 | 0.76 | 0.81 | 0.78 | 14.2 ± 2.9 |
-| ADHD | Trans-FL | 0.77 | 0.69 | 0.74 | 0.71 | 15.3 ± 3.4 |
-
-### Privacy-Utility Tradeoff
-
-- ε = 0.5: 95% utility retention
-- ε = 1.0: 98% utility retention
-- δ = 10⁻⁵ (fixed)
-
-### Fairness Metrics (ASD Indicators)
-
-- TPR gap across income quintiles: < 0.04
-- TPR gap across geography: < 0.04
-- Equalized odds satisfied within recommended thresholds
 
 ## DevelopMap Taxonomy
 
-Universal product classification across 10 developmental domains:
+Universal product classification across 10 developmental domains, each with specific clinical tool citations:
 
-1. **Fine Motor Development**: Puzzles, blocks, threading toys
-2. **Gross Motor Development**: Bikes, balls, climbing toys
-3. **Language Development**: Books, AAC devices, speech tools
-4. **Social-Emotional**: Board games, pretend play, social stories
-5. **Sensory Processing**: Fidget toys, weighted blankets, noise-canceling
-6. **Adaptive Equipment**: Special utensils, positioning aids
-7. **Sleep Management**: White noise, weighted blankets, sleep clocks
-8. **Feeding Challenges**: Sensory bottles, divided plates, texture foods
-9. **Behavioral Regulation**: Visual schedules, timers, reward charts
-10. **Therapeutic Resources**: Therapy workbooks, assessment tools
+| Domain | Clinical Alignment |
+|--------|-------------------|
+| Fine Motor | ASQ-3 Fine Motor (Squires & Bricker, 2009); PDMS-2 (Folio & Fewell, 2000) |
+| Gross Motor | ASQ-3 Gross Motor; Bayley-III Motor Scale (Bayley, 2006) |
+| Language | ASQ-3 Communication; M-CHAT-R/F Items 5,6 (Robins et al., 2014) |
+| Social-Emotional | ASQ-3 Personal-Social; M-CHAT-R/F; ITSEA (Carter & Briggs-Gowan, 2006) |
+| Sensory | SPM (Parham & Ecker, 2007); Sensory Profile-2 (Dunn, 2014) |
+| Adaptive | ABAS-3 (Harrison & Oakland, 2015); Vineland-3 (Sparrow et al., 2016) |
+| Sleep | CSHQ (Owens et al., 2000); BISQ (Sadeh, 2004) |
+| Feeding | PediEAT (Thoyre et al., 2014); BAMBI (Lukens & Linscheid, 2008) |
+| Behavioral | BASC-3 (Reynolds & Kamphaus, 2015); BRIEF-P (Gioia et al., 2003) |
+| Therapeutic | IDEA Part C; AAP guidelines (Lipkin et al., 2020) |
+
+## Real Data Sources
+
+| Dataset | Purpose | URL |
+|---------|---------|-----|
+| NSCH 2022 | Delay prevalence, demographics | census.gov/programs-surveys/nsch |
+| CE PUMD | Age-specific spending curves | bls.gov/cex/pumd_data.htm |
+| Amazon Reviews 2023 | Product classification validation | huggingface.co/datasets/McAuley-Lab/Amazon-Reviews-2023 |
+| PSID-CDS | Expenditure-outcome correlations | psidonline.isr.umich.edu/cds/ |
 
 ## Privacy Guarantees
 
-### Differential Privacy
-
-- **Mechanism**: Gaussian mechanism with gradient clipping
-- **Budget**: ε < 1.0, δ = 10⁻⁵
-- **Composition**: Rényi DP accounting across training rounds
-- **Amplification**: Poisson subsampling for privacy amplification
-
-### Secure Aggregation
-
-- Masked gradient updates
-- No raw customer data leaves retailer premises
-- Only aggregated, noisy updates shared
+- **Differential Privacy**: Gaussian mechanism + gradient clipping + Rényi DP accounting
+- **Gradient Inversion Defense**: Top-k compression, SVD perturbation, InstaHide mixing
+- **Secure Aggregation**: Masked updates with dropped-client handling + integrity verification
 
 ## Ethical Considerations
 
-### Non-Diagnostic Framework
-
-- System provides screening **prompts**, not diagnoses
-- Requires pediatric oversight and follow-up
-- Clear communication to parents about limitations
-
-### Opt-In Consent
-
-- Explicit parental consent required
-- Easy withdrawal mechanism
-- Transparent data usage policies
-
-### Fairness & Equity
-
-- Cross-demographic validation
-- Income-stratified thresholds
-- Periodic bias audits
-- Community advisory board
-
-### Governance
-
-- IRB review required for deployment
-- Model/data cards for transparency
-- Prohibition on monetizing children's health signals
-- FDA decision-support guidance compliance
-
-## Deployment Roadmap
-
-### Phase 1: Pilot (Months 1-6)
-- Partner with 1-2 regional retailers
-- 10,000 opt-in families
-- IRB-approved study
-- Target: 20% lag reduction, <15% FPR
-
-### Phase 2: Federation (Months 7-12)
-- Expand to 5-10 retailers
-- Enable federated learning
-- A/B test federated vs. single-retailer
-
-### Phase 3: Clinical Integration (Year 2)
-- EHR API integration
-- Warm handoffs to pediatricians
-- Feedback loop from outcomes
-
-### Phase 4: Scale (Year 3+)
-- National rollout (50M children)
-- Cost-effectiveness analysis
-- International expansion
+- **Non-Diagnostic**: Screening prompts only, not diagnoses
+- **Consent**: COPPA-aware, granular, revocable consent management
+- **Audit Trail**: Hash-chained, tamper-evident logging of all model lifecycle events
+- **Fairness**: Selection bias analysis, coverage gap estimation, per-group metrics
+- **Governance**: IRB review required; prohibition on monetizing health signals
 
 ## Citation
 
-If you use this framework in your research, please cite:
-
 ```bibtex
 @article{poreddy2025retailhealth,
-  title={Privacy-Preserving Developmental Screening Through Retail Transaction Analytics: A Federated Learning Framework for E-Commerce Platforms},
+  title={Privacy-Preserving Developmental Screening Through Retail Transaction
+         Analytics: A Federated Learning Framework for E-Commerce Platforms},
   author={Poreddy, Kapil},
   journal={arXiv preprint},
   year={2025}
@@ -242,8 +217,6 @@ If you use this framework in your research, please cite:
 Apache License 2.0 - see [LICENSE](LICENSE) file for details.
 
 ## Contributing
-
-We welcome contributions! Please:
 
 1. Fork the repository
 2. Create a feature branch
@@ -262,12 +235,10 @@ This work builds on research in federated learning, differential privacy, develo
 
 ## Disclaimer
 
-**IMPORTANT**: This is a research prototype using synthetic data. It has not been clinically validated and should not be used for actual medical screening without:
+**IMPORTANT**: This is a research prototype. Key limitations:
 
-1. Prospective clinical validation studies
-2. Expert review by developmental pediatricians
-3. IRB approval
-4. Regulatory compliance (FDA, FTC, state privacy laws)
-5. Proper consent mechanisms
-
-All performance metrics are based on simulated data and may not reflect real-world performance.
+1. **Synthetic data circularity**: The generator hardcodes purchase multipliers that encode the very signal the model then detects. The ablation study (`scripts/run_ablation_study.py`) quantifies this dependency. Gaussian noise has been added to multipliers but does not eliminate circularity.
+2. **No real-world validation**: All performance metrics are from synthetic data. Real data loaders are provided but require manual dataset download.
+3. **Temporal ≠ causal**: The `temporal_analysis` module identifies temporal precedence (Granger-style), not causation. Unmeasured confounders cannot be ruled out.
+4. **Not clinically validated**: Do not use for actual medical screening without prospective clinical studies, IRB approval, and regulatory compliance (FDA, FTC, state privacy laws).
+5. **Selection bias**: Retail purchase data systematically under-represents low-income and rural populations. The `SelectionBiasAnalyzer` quantifies but does not eliminate this.

@@ -19,7 +19,7 @@ cryptography>=38.0.0
 transformers>=4.20.0
 sentence-transformers>=2.2.0
 
-# Causal Inference
+# Temporal Analysis (Granger precedence, propensity, counterfactual)
 statsmodels>=0.13.0
 econml>=0.13.0
 dowhy>=0.8
