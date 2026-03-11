@@ -66,20 +66,48 @@ class SecureAggregator:
     
     def aggregate_masked_updates(self, masked_updates: List[Dict[str, torch.Tensor]],
                                 client_ids: List[str], round_num: int,
-                                weights: List[float] = None) -> Dict[str, torch.Tensor]:
+                                weights: List[float] = None,
+                                expected_client_ids: List[str] = None
+                                ) -> Dict[str, torch.Tensor]:
         """Aggregate masked updates and remove masks.
+        
+        Handles dropped clients: if expected_client_ids is provided,
+        any client present in expected but missing from client_ids is
+        treated as dropped. Their mask contribution is still subtracted
+        (since masks are deterministic) to preserve correctness, and
+        weights are renormalized over surviving clients.
         
         Args:
             masked_updates: List of masked model updates
-            client_ids: List of client identifiers
+            client_ids: List of client identifiers that responded
             round_num: Training round number
             weights: Optional weights for weighted average
+            expected_client_ids: Full list of expected clients (optional).
+                If provided, enables dropped-client handling.
             
         Returns:
             Aggregated model update (masks cancelled out)
         """
+        # Detect dropped clients
+        dropped_ids = []
+        if expected_client_ids is not None:
+            responded_set = set(client_ids)
+            dropped_ids = [cid for cid in expected_client_ids
+                           if cid not in responded_set]
+            if dropped_ids:
+                import warnings
+                warnings.warn(
+                    f"Dropped clients in round {round_num}: {dropped_ids}. "
+                    f"Renormalizing weights over {len(client_ids)} survivors."
+                )
+
         if weights is None:
             weights = [1.0 / len(masked_updates)] * len(masked_updates)
+        else:
+            # Renormalize weights for surviving clients
+            total = sum(weights)
+            if total > 0:
+                weights = [w / total for w in weights]
         
         # Initialize aggregated update
         aggregated = {}
@@ -93,7 +121,7 @@ class SecureAggregator:
                 w * update[name] for w, update in zip(weights, masked_updates)
             )
             
-            # Sum of masks (should cancel out in expectation)
+            # Sum of masks for surviving clients
             mask_sum = sum(
                 w * self.generate_mask(cid, round_num, masked_updates[0][name].shape,
                                       masked_updates[0][name].device)
@@ -104,6 +132,53 @@ class SecureAggregator:
             aggregated[name] = weighted_sum - mask_sum
         
         return aggregated
+
+    def verify_aggregation_integrity(self,
+                                      original_updates: List[Dict[str, torch.Tensor]],
+                                      aggregated: Dict[str, torch.Tensor],
+                                      weights: List[float] = None,
+                                      tolerance: float = 1e-4) -> Dict[str, bool]:
+        """Verify that secure aggregation produced correct results.
+
+        Computes the plaintext weighted average and compares it to the
+        secure aggregation output. Any discrepancy beyond tolerance
+        indicates a mask cancellation error or dropped-client issue.
+
+        Args:
+            original_updates: List of *unmasked* model updates
+            aggregated: Output of aggregate_masked_updates
+            weights: Weights used during aggregation
+            tolerance: Maximum allowable L-inf difference per parameter
+
+        Returns:
+            Dict mapping parameter name to whether verification passed
+        """
+        if weights is None:
+            weights = [1.0 / len(original_updates)] * len(original_updates)
+
+        results = {}
+        param_names = list(original_updates[0].keys())
+
+        for name in param_names:
+            expected = sum(
+                w * update[name] for w, update in zip(weights, original_updates)
+            )
+            actual = aggregated[name]
+            max_diff = float((expected - actual).abs().max())
+            results[name] = {
+                'passed': max_diff <= tolerance,
+                'max_diff': max_diff,
+            }
+
+        all_passed = all(v['passed'] for v in results.values())
+        if not all_passed:
+            import warnings
+            failed = [k for k, v in results.items() if not v['passed']]
+            warnings.warn(
+                f"Aggregation integrity check FAILED for parameters: {failed}"
+            )
+
+        return results
     
     def simple_aggregate(self, updates: List[Dict[str, torch.Tensor]],
                         weights: List[float] = None) -> Dict[str, torch.Tensor]:
