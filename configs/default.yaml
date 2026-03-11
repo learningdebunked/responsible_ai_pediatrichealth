@@ -4,14 +4,18 @@
 data:
   n_families: 100000
   age_range: [0, 6]
-  delay_prevalence: 0.15
+  delay_prevalence: 0.178   # NSCH 2022 — was 0.15
   delay_types:
-    language: 0.06
-    motor: 0.02
-    asd: 0.015
-    adhd: 0.04
+    language: 0.05           # NSCH 2022 — was 0.06
+    motor: 0.03              # NSCH 2022 — was 0.02
+    asd: 0.027               # CDC 2023: 1 in 36 — was 0.015
+    adhd: 0.097              # NSCH 2022 — was 0.04
   months_history: 24
   seed: 42
+  household:
+    n_children_distribution: [0.40, 0.45, 0.15]  # 1, 2, 3+ children (ACS)
+    single_parent_rate: 0.23
+    multi_generational_rate: 0.04
   
 # DevelopMap Taxonomy
 taxonomy:

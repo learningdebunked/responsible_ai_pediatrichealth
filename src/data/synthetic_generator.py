@@ -10,6 +10,9 @@ from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 import random
+import json
+import warnings
+from pathlib import Path
 
 from ..taxonomy.developmap import DEVELOPMAP
 
@@ -25,6 +28,8 @@ class FamilyProfile:
     income_quintile: int  # 1-5
     geography: str  # urban, suburban, rural
     ethnicity: str
+    n_children: int = 1
+    household_type: str = 'nuclear'  # 'nuclear', 'single_parent', 'multi_generational', 'shared_custody'
 
 
 class SyntheticDataGenerator:
@@ -43,6 +48,10 @@ class SyntheticDataGenerator:
         
         # Product catalog by domain
         self._initialize_product_catalog()
+        
+        # Try loading empirical baseline rates
+        self._empirical_rates = None
+        self._load_empirical_baseline_rates()
     
     def _initialize_product_catalog(self):
         """Create a synthetic product catalog aligned with DevelopMap."""
@@ -91,10 +100,10 @@ class SyntheticDataGenerator:
         """
         if delay_types is None:
             delay_types = {
-                'language': 0.06,
-                'motor': 0.02,
-                'asd': 0.015,
-                'adhd': 0.04
+                'language': 0.05,   # NSCH 2022
+                'motor': 0.03,      # NSCH 2022
+                'asd': 0.027,       # CDC 2023: 1 in 36
+                'adhd': 0.097,      # NSCH 2022
             }
         
         families = []
@@ -125,6 +134,18 @@ class SyntheticDataGenerator:
                 ['white', 'hispanic', 'black', 'asian', 'other'],
                 p=[0.60, 0.18, 0.13, 0.06, 0.03]
             )
+
+            # Household structure (ACS-based)
+            n_children = np.random.choice([1, 2, 3], p=[0.40, 0.45, 0.15])
+            household_rand = np.random.random()
+            if household_rand < 0.23:
+                household_type = 'single_parent'
+            elif household_rand < 0.27:
+                household_type = 'multi_generational'
+            elif household_rand < 0.32:
+                household_type = 'shared_custody'
+            else:
+                household_type = 'nuclear'
             
             family = FamilyProfile(
                 family_id=f"family_{i:06d}",
@@ -134,14 +155,29 @@ class SyntheticDataGenerator:
                 delay_onset_month=delay_onset,
                 income_quintile=income_quintile,
                 geography=geography,
-                ethnicity=ethnicity
+                ethnicity=ethnicity,
+                n_children=n_children,
+                household_type=household_type,
             )
             families.append(family)
         
         return families
     
+    def _load_empirical_baseline_rates(self):
+        """Try to load empirical baseline rates from CE data."""
+        ce_path = Path('data/processed/ce_baseline_rates.json')
+        if ce_path.exists():
+            with open(ce_path) as f:
+                self._empirical_rates = json.load(f)
+            return True
+        return False
+
     def _get_baseline_purchase_rate(self, child_age_months: int, domain: str) -> float:
         """Get baseline monthly purchase rate for a domain given child age.
+        
+        Tries to use empirical rates from Consumer Expenditure Survey data
+        (loaded from data/processed/ce_baseline_rates.json). Falls back to
+        hardcoded rates with a warning if empirical data is not available.
         
         Args:
             child_age_months: Child age in months
@@ -150,10 +186,27 @@ class SyntheticDataGenerator:
         Returns:
             Expected number of purchases per month
         """
-        # Age-appropriate baseline rates
+        # Try empirical rates first
+        if hasattr(self, '_empirical_rates') and self._empirical_rates:
+            domain_rates = self._empirical_rates.get(domain)
+            if domain_rates:
+                # Find closest age key
+                age_key = str(int(round(child_age_months / 6.0) * 6))
+                age_key = str(min(72, max(0, int(age_key))))
+                if age_key in domain_rates:
+                    return domain_rates[age_key]
+
+        if not hasattr(self, '_baseline_warning_shown'):
+            warnings.warn(
+                "WARNING: Using hardcoded baseline rates. "
+                "Run scripts/download_public_data.py for empirical rates.",
+                stacklevel=2
+            )
+            self._baseline_warning_shown = True
+
+        # Hardcoded fallback rates
         age_years = child_age_months / 12.0
         
-        # Different domains have different age profiles
         if domain == 'fine_motor':
             return 0.3 + 0.2 * min(age_years, 3)
         elif domain == 'gross_motor':
@@ -163,11 +216,11 @@ class SyntheticDataGenerator:
         elif domain == 'social_emotional':
             return 0.2 + 0.2 * min(age_years, 4)
         elif domain in ['sensory', 'adaptive', 'sleep', 'feeding']:
-            return 0.1  # Lower baseline
+            return 0.1
         elif domain == 'behavioral':
             return 0.1 + 0.2 * max(0, age_years - 2)
         elif domain == 'therapeutic':
-            return 0.05  # Very low baseline
+            return 0.05
         else:
             return 0.2
     
@@ -186,6 +239,7 @@ class SyntheticDataGenerator:
         ramp_factor = min(months_since_onset / 6.0, 1.0)
         
         # Domain-specific multipliers for each delay type
+        # TODO: Replace with empirical multipliers from PSID-CDS validation
         multipliers = {
             'language': {
                 'language': 3.0,
@@ -216,7 +270,10 @@ class SyntheticDataGenerator:
         }
         
         base_multiplier = multipliers.get(delay_type, {}).get(domain, 1.0)
-        return 1.0 + (base_multiplier - 1.0) * ramp_factor
+        # Add Gaussian noise to avoid perfectly deterministic signal
+        noisy_multiplier = base_multiplier * np.random.normal(1.0, 0.3)
+        noisy_multiplier = np.clip(noisy_multiplier, 0.5, base_multiplier * 1.5)
+        return 1.0 + (noisy_multiplier - 1.0) * ramp_factor
     
     def generate_transactions(
         self,
@@ -283,7 +340,93 @@ class SyntheticDataGenerator:
         if len(df) > 0:
             df = df.sort_values('transaction_date').reset_index(drop=True)
         
+        # Inject realistic confounds by default
+        df = self.generate_confounded_transactions(family, df)
+        
         return df
+    
+    def generate_confounded_transactions(
+        self,
+        family: FamilyProfile,
+        transactions: pd.DataFrame
+    ) -> pd.DataFrame:
+        """Inject realistic confounds into transaction data.
+        
+        Adds noise that would be present in real retail data:
+        - Sibling purchases (toys bought for older sibling flag younger child)
+        - Gift purchases (random products for other children)
+        - Temporal misalignment (purchase date != use date)
+        - Multi-shopper noise (purchases from different shopper in household)
+        
+        Args:
+            family: Family profile
+            transactions: Clean transaction DataFrame
+            
+        Returns:
+            Transaction DataFrame with confounds injected
+        """
+        if len(transactions) == 0:
+            return transactions
+        
+        confounded = transactions.copy()
+        
+        # 1. Sibling purchases: if n_children > 1, add purchases for older siblings
+        #    that may look like developmental products but aren't for the target child
+        if family.n_children > 1:
+            n_sibling_purchases = np.random.poisson(family.n_children * 2)
+            sibling_rows = []
+            for _ in range(n_sibling_purchases):
+                # Random domain — siblings may buy sensory/language items regardless
+                domain = random.choice(self.developmap.get_domain_names())
+                product = random.choice(self.product_catalog[domain])
+                # Pick a random existing date
+                idx = np.random.randint(len(confounded))
+                row = {
+                    'family_id': family.family_id,
+                    'transaction_date': confounded.iloc[idx]['transaction_date'],
+                    'product_id': product['product_id'],
+                    'product_name': product['name'],
+                    'domain': domain,
+                    'price': product['price'] * np.random.uniform(0.8, 1.2),
+                    'child_age_months': confounded.iloc[idx]['child_age_months'],
+                }
+                sibling_rows.append(row)
+            if sibling_rows:
+                confounded = pd.concat(
+                    [confounded, pd.DataFrame(sibling_rows)], ignore_index=True
+                )
+        
+        # 2. Gift purchases: ~5% of transactions are gifts (random domain)
+        gift_mask = np.random.random(len(confounded)) < 0.05
+        for idx in np.where(gift_mask)[0]:
+            random_domain = random.choice(self.developmap.get_domain_names())
+            product = random.choice(self.product_catalog[random_domain])
+            confounded.at[idx, 'domain'] = random_domain
+            confounded.at[idx, 'product_id'] = product['product_id']
+            confounded.at[idx, 'product_name'] = product['name']
+        
+        # 3. Temporal misalignment: shift ~20% of purchase dates by 1-8 weeks
+        shift_mask = np.random.random(len(confounded)) < 0.20
+        for idx in np.where(shift_mask)[0]:
+            lag_days = np.random.randint(7, 57)  # 1-8 weeks
+            confounded.at[idx, 'transaction_date'] = (
+                confounded.at[idx, 'transaction_date'] - timedelta(days=lag_days)
+            )
+        
+        # 4. Multi-shopper noise: 10% of purchases from a different shopper
+        #    (simulated by adding small random noise to purchase patterns)
+        shopper_mask = np.random.random(len(confounded)) < 0.10
+        for idx in np.where(shopper_mask)[0]:
+            # Different shopper might buy slightly different products
+            random_domain = random.choice(self.developmap.get_domain_names())
+            product = random.choice(self.product_catalog[random_domain])
+            confounded.at[idx, 'domain'] = random_domain
+            confounded.at[idx, 'product_id'] = product['product_id']
+            confounded.at[idx, 'product_name'] = product['name']
+        
+        # Re-sort by date
+        confounded = confounded.sort_values('transaction_date').reset_index(drop=True)
+        return confounded
     
     def generate_dataset(
         self,
@@ -314,7 +457,9 @@ class SyntheticDataGenerator:
                 'delay_onset_month': f.delay_onset_month,
                 'income_quintile': f.income_quintile,
                 'geography': f.geography,
-                'ethnicity': f.ethnicity
+                'ethnicity': f.ethnicity,
+                'n_children': f.n_children,
+                'household_type': f.household_type,
             }
             for f in families
         ])
