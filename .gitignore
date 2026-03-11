@@ -35,10 +35,15 @@ env/
 *~
 .DS_Store
 
+# Environment
+.env
+
 # Data
 data/raw/*
 data/processed/*
 data/synthetic/*
+data/public/*
+!data/*/.gitkeep
 !data/raw/.gitkeep
 !data/processed/.gitkeep
 !data/synthetic/.gitkeep
