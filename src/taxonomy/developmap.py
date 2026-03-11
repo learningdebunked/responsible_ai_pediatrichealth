@@ -42,7 +42,7 @@ class DevelopMap:
                     "Wooden puzzles", "Building blocks", "Bead maze",
                     "Threading toys", "Crayons", "Playdough set"
                 ],
-                clinical_alignment="ASQ Fine Motor Scale"
+                clinical_alignment="ASQ-3 Fine Motor domain (Squires & Bricker, 2009); Peabody Developmental Motor Scales-2 (Folio & Fewell, 2000)"
             ),
             
             "gross_motor": DevelopmentalDomain(
@@ -58,7 +58,7 @@ class DevelopMap:
                     "Balance bike", "Scooter", "Soccer ball", "Trampoline",
                     "Climbing dome", "Ride-on toy"
                 ],
-                clinical_alignment="ASQ Gross Motor Scale"
+                clinical_alignment="ASQ-3 Gross Motor domain (Squires & Bricker, 2009); Bayley-III Motor Scale (Bayley, 2006)"
             ),
             
             "language": DevelopmentalDomain(
@@ -75,7 +75,7 @@ class DevelopMap:
                     "Board books", "Flashcards", "AAC device", "PECS cards",
                     "Speech therapy tools", "Alphabet toys"
                 ],
-                clinical_alignment="ASQ Communication Scale, M-CHAT Language Items"
+                clinical_alignment="ASQ-3 Communication domain (Squires & Bricker, 2009); M-CHAT-R/F Items 5,6 (Robins et al., 2014); LENA developmental snapshot"
             ),
             
             "social_emotional": DevelopmentalDomain(
@@ -92,7 +92,7 @@ class DevelopMap:
                     "Board games", "Dolls", "Pretend play sets", "Social stories",
                     "Emotion cards", "Puppet theater"
                 ],
-                clinical_alignment="ASQ Personal-Social Scale, M-CHAT Social Items"
+                clinical_alignment="ASQ-3 Personal-Social domain (Squires & Bricker, 2009); M-CHAT-R/F Items 2,7,9,13-15 (Robins et al., 2014); ITSEA Social-Emotional (Carter & Briggs-Gowan, 2006)"
             ),
             
             "sensory": DevelopmentalDomain(
@@ -109,7 +109,7 @@ class DevelopMap:
                     "Fidget toys", "Weighted blanket", "Noise-canceling headphones",
                     "Chew necklace", "Sensory bin", "Compression vest"
                 ],
-                clinical_alignment="Sensory Processing Measure (SPM)"
+                clinical_alignment="Sensory Processing Measure (SPM; Parham & Ecker, 2007); Sensory Profile-2 (Dunn, 2014); Short Sensory Profile (McIntosh et al., 1999)"
             ),
             
             "adaptive": DevelopmentalDomain(
@@ -125,7 +125,7 @@ class DevelopMap:
                     "Special utensils", "Non-slip plates", "Positioning aids",
                     "Therapy ball", "Orthotics", "Adaptive scissors"
                 ],
-                clinical_alignment="Adaptive Behavior Assessment System (ABAS)"
+                clinical_alignment="Adaptive Behavior Assessment System-3 (ABAS-3; Harrison & Oakland, 2015); Vineland-3 Adaptive Behavior Scales (Sparrow et al., 2016)"
             ),
             
             "sleep": DevelopmentalDomain(
@@ -141,7 +141,7 @@ class DevelopMap:
                     "White noise machine", "Night light", "Sleep clock",
                     "Weighted blanket", "Sleep sack", "Melatonin supplements"
                 ],
-                clinical_alignment="Children's Sleep Habits Questionnaire (CSHQ)"
+                clinical_alignment="Children's Sleep Habits Questionnaire (CSHQ; Owens et al., 2000); Brief Infant Sleep Questionnaire (BISQ; Sadeh, 2004)"
             ),
             
             "feeding": DevelopmentalDomain(
@@ -158,7 +158,7 @@ class DevelopMap:
                     "Divided plates", "Sensory bottles", "Texture foods",
                     "Oral motor tools", "Supplements", "Special utensils"
                 ],
-                clinical_alignment="Pediatric Feeding Assessment"
+                clinical_alignment="Pediatric Eating Assessment Tool (PediEAT; Thoyre et al., 2014); Brief Autism Mealtime Behavior Inventory (BAMBI; Lukens & Linscheid, 2008)"
             ),
             
             "behavioral": DevelopmentalDomain(
@@ -175,7 +175,7 @@ class DevelopMap:
                     "Visual schedules", "Timers", "Reward charts", "Token boards",
                     "Countdown clocks", "Organization tools"
                 ],
-                clinical_alignment="Behavior Assessment System for Children (BASC)"
+                clinical_alignment="BASC-3 (Reynolds & Kamphaus, 2015); Conners Early Childhood (Conners, 2009); BRIEF-P (Gioia et al., 2003)"
             ),
             
             "therapeutic": DevelopmentalDomain(
@@ -191,7 +191,7 @@ class DevelopMap:
                     "Therapy workbooks", "Parent guides", "Assessment tools",
                     "Milestone trackers", "Intervention materials"
                 ],
-                clinical_alignment="Various screening and intervention tools"
+                clinical_alignment="IDEA Part C (34 CFR 303); AAP developmental surveillance guidelines (Lipkin et al., 2020); CDC Learn the Signs. Act Early."
             )
         }
         
@@ -212,6 +212,61 @@ class DevelopMap:
     def get_clinical_alignments(self) -> Dict[str, str]:
         """Return clinical tool alignments for each domain."""
         return {name: domain.clinical_alignment for name, domain in self.domains.items()}
+
+
+    def validate_against_asq3(self, asq3_domain_map: Dict[str, List[str]] = None) -> Dict[str, dict]:
+        """Validate DevelopMap domains against ASQ-3 screening domains.
+
+        ASQ-3 has 5 domains: Communication, Gross Motor, Fine Motor,
+        Problem Solving, and Personal-Social. This method checks that
+        each DevelopMap domain maps to at least one ASQ-3 domain and
+        reports coverage gaps.
+
+        Args:
+            asq3_domain_map: Optional override mapping ASQ-3 domain names
+                to lists of DevelopMap domain names. If None, uses the
+                default mapping below.
+
+        Returns:
+            Dict per DevelopMap domain with keys:
+                asq3_domains: list of mapped ASQ-3 domains
+                has_asq3_mapping: bool
+                clinical_ref: extracted citation string
+        """
+        if asq3_domain_map is None:
+            asq3_domain_map = {
+                'Communication': ['language'],
+                'Gross Motor': ['gross_motor'],
+                'Fine Motor': ['fine_motor'],
+                'Problem Solving': ['sensory', 'behavioral', 'adaptive'],
+                'Personal-Social': ['social_emotional', 'feeding', 'sleep'],
+            }
+
+        # Invert: DevelopMap domain -> ASQ-3 domains
+        dm_to_asq = {}
+        for asq_domain, dm_domains in asq3_domain_map.items():
+            for dm in dm_domains:
+                dm_to_asq.setdefault(dm, []).append(asq_domain)
+
+        results = {}
+        for domain_name, domain in self.domains.items():
+            asq_domains = dm_to_asq.get(domain_name, [])
+            results[domain_name] = {
+                'asq3_domains': asq_domains,
+                'has_asq3_mapping': len(asq_domains) > 0,
+                'clinical_ref': domain.clinical_alignment,
+            }
+
+        # Summary
+        n_mapped = sum(1 for v in results.values() if v['has_asq3_mapping'])
+        n_total = len(results)
+        print(f"ASQ-3 Validation: {n_mapped}/{n_total} DevelopMap domains mapped")
+        unmapped = [k for k, v in results.items() if not v['has_asq3_mapping']]
+        if unmapped:
+            print(f"  Unmapped domains: {unmapped}")
+            print(f"  (These domains extend beyond ASQ-3 scope, e.g., therapeutic)")
+
+        return results
 
 
 # Global instance

@@ -161,6 +161,102 @@ class ProductClassifier:
         primary_domain = max(scores.items(), key=lambda x: x[1])
         return primary_domain
     
+    def calibrate(
+        self,
+        labeled_products: List[Tuple[str, str]],
+        threshold_range: Tuple[float, float] = (0.1, 0.9),
+        weight_range: Tuple[float, float] = (0.0, 1.0),
+        n_steps: int = 10
+    ) -> Dict[str, float]:
+        """Calibrate classification thresholds and keyword-vs-embedding weights.
+
+        Uses labeled product data to find the threshold and keyword_weight
+        that maximize macro-averaged F1 score across all domains.
+
+        Args:
+            labeled_products: List of (product_text, true_domain) tuples
+            threshold_range: Min and max threshold to search
+            weight_range: Min and max keyword_weight to search
+            n_steps: Number of grid search steps per parameter
+
+        Returns:
+            Dict with best_threshold, best_keyword_weight, best_f1, and
+            per-domain precision/recall
+        """
+        from sklearn.metrics import f1_score as sklearn_f1
+
+        texts = [t for t, _ in labeled_products]
+        true_labels = [d for _, d in labeled_products]
+
+        thresholds = np.linspace(threshold_range[0], threshold_range[1], n_steps)
+        weights = np.linspace(weight_range[0], weight_range[1], n_steps)
+
+        best_f1 = -1.0
+        best_threshold = self.default_threshold if hasattr(self, 'default_threshold') else 0.3
+        best_kw_weight = self.keyword_weight
+
+        for thresh in thresholds:
+            for kw_w in weights:
+                # Temporarily set weights
+                old_kw = self.keyword_weight
+                self.keyword_weight = kw_w
+
+                preds = []
+                for text in texts:
+                    scores = self.classify(text, threshold=thresh)
+                    if scores:
+                        preds.append(max(scores, key=scores.get))
+                    else:
+                        preds.append('unmapped')
+
+                # Restore
+                self.keyword_weight = old_kw
+
+                # Macro F1
+                all_labels = list(set(true_labels + preds))
+                f1 = sklearn_f1(true_labels, preds, labels=all_labels,
+                                average='macro', zero_division=0)
+
+                if f1 > best_f1:
+                    best_f1 = f1
+                    best_threshold = thresh
+                    best_kw_weight = kw_w
+
+        # Apply best parameters
+        self.keyword_weight = best_kw_weight
+        if hasattr(self, 'default_threshold'):
+            self.default_threshold = best_threshold
+
+        # Compute per-domain metrics with best params
+        preds = []
+        for text in texts:
+            scores = self.classify(text, threshold=best_threshold)
+            if scores:
+                preds.append(max(scores, key=scores.get))
+            else:
+                preds.append('unmapped')
+
+        domain_metrics = {}
+        for domain in set(true_labels):
+            tp = sum(1 for t, p in zip(true_labels, preds) if t == domain and p == domain)
+            fp = sum(1 for t, p in zip(true_labels, preds) if t != domain and p == domain)
+            fn = sum(1 for t, p in zip(true_labels, preds) if t == domain and p != domain)
+            precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+            recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+            domain_metrics[domain] = {'precision': precision, 'recall': recall}
+
+        result = {
+            'best_threshold': float(best_threshold),
+            'best_keyword_weight': float(best_kw_weight),
+            'best_f1': float(best_f1),
+            'per_domain_metrics': domain_metrics,
+        }
+
+        print(f"Calibration: threshold={best_threshold:.2f}, "
+              f"keyword_weight={best_kw_weight:.2f}, F1={best_f1:.3f}")
+
+        return result
+
     def get_domain_vector(self, product_text: str) -> np.ndarray:
         """Get a vector representation of domain scores.
         
