@@ -1,4 +1,9 @@
-"""Temporal causal discovery using Granger causality."""
+"""Temporal association discovery using Granger-style precedence tests.
+
+IMPORTANT: Granger tests establish temporal precedence, NOT causation.
+Results should be interpreted as 'X temporally precedes Y' rather than
+'X causes Y'. See Granger (1969) and subsequent critiques.
+"""
 
 import numpy as np
 import pandas as pd
@@ -9,8 +14,14 @@ import warnings
 warnings.filterwarnings('ignore')
 
 
-class GrangerCausalityAnalyzer:
-    """Granger causality analysis for time series."""
+class TemporalAssociationAnalyzer:
+    """Temporal association analysis using Granger-style precedence tests.
+    
+    NOTE: Despite using Granger 'causality' tests internally, this class
+    identifies temporal associations (X precedes Y), not true causal
+    relationships. Confounding, reverse causation, and selection bias
+    cannot be ruled out without experimental or quasi-experimental designs.
+    """
     
     def __init__(self, max_lags: int = 3, significance_level: float = 0.05):
         """Initialize analyzer.
@@ -106,7 +117,7 @@ class TemporalCausalDiscovery:
     
     def __init__(self, max_lags: int = 3):
         self.max_lags = max_lags
-        self.granger_analyzer = GrangerCausalityAnalyzer(max_lags=max_lags)
+        self.granger_analyzer = TemporalAssociationAnalyzer(max_lags=max_lags)
     
     def discover_causal_graph(self, data: pd.DataFrame, 
                              variables: List[str]) -> Dict[str, List[str]]:
