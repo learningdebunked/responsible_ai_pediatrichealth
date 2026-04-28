@@ -164,13 +164,120 @@ class SyntheticDataGenerator:
         return families
     
     def _load_empirical_baseline_rates(self):
-        """Try to load empirical baseline rates from CE data."""
+        """Try to load empirical baseline rates from real data sources.
+        
+        Priority order:
+        1. Instacart rates (most granular transaction data)
+        2. Tesco rates (UK grocery data for cross-validation)
+        3. Consumer Expenditure Survey rates (US spending data)
+        4. Fall back to hardcoded rates with warning
+        """
+        # Try Instacart first (best source for transaction patterns)
+        instacart_path = Path('data/processed/instacart_rates.json')
+        if instacart_path.exists():
+            with open(instacart_path) as f:
+                data = json.load(f)
+                self._empirical_rates = data.get('domain_rates_for_synthetic', {})
+                self._empirical_source = 'instacart'
+                print("Loaded empirical rates from Instacart data")
+                return True
+
+        # Try Tesco as backup
+        tesco_path = Path('data/processed/tesco_rates.json')
+        if tesco_path.exists():
+            with open(tesco_path) as f:
+                data = json.load(f)
+                self._empirical_rates = data.get('domain_rates_for_synthetic', {})
+                self._empirical_source = 'tesco'
+                print("Loaded empirical rates from Tesco data")
+                return True
+
+        # Fall back to CE data
         ce_path = Path('data/processed/ce_baseline_rates.json')
         if ce_path.exists():
             with open(ce_path) as f:
                 self._empirical_rates = json.load(f)
-            return True
+                self._empirical_source = 'ce'
+                print("Loaded empirical rates from Consumer Expenditure Survey")
+                return True
+
+        self._empirical_source = None
         return False
+
+    def _load_empirical_multipliers(self):
+        """Try to load empirical delay multipliers from real data.
+        
+        Uses Kaggle ASD data and PSID-CDS correlations to derive
+        multipliers instead of hardcoded values.
+        """
+        # Try PSID correlation results
+        psid_path = Path('data/processed/psid_correlation_results.json')
+        if psid_path.exists():
+            with open(psid_path) as f:
+                self._psid_correlations = json.load(f)
+                return True
+
+        # Try Kaggle ASD question importance
+        asd_path = Path('data/processed/kaggle_asd_processed.json')
+        if asd_path.exists():
+            with open(asd_path) as f:
+                data = json.load(f)
+                self._asd_question_importance = data.get('question_importance', {})
+                return True
+
+        return False
+
+    def use_real_data_rates(self, instacart_path: str = None, 
+                            tesco_path: str = None,
+                            nsch_path: str = None) -> bool:
+        """Explicitly load real data rates to eliminate synthetic circularity.
+        
+        Args:
+            instacart_path: Path to Instacart rates JSON
+            tesco_path: Path to Tesco rates JSON
+            nsch_path: Path to NSCH population stats JSON
+            
+        Returns:
+            True if at least one source loaded successfully
+        """
+        loaded = False
+
+        if instacart_path and Path(instacart_path).exists():
+            with open(instacart_path) as f:
+                data = json.load(f)
+                self._instacart_rates = data
+                self._empirical_rates = data.get('domain_rates_for_synthetic', {})
+                self._empirical_source = 'instacart'
+                loaded = True
+                print(f"Loaded Instacart rates from {instacart_path}")
+
+        if tesco_path and Path(tesco_path).exists():
+            with open(tesco_path) as f:
+                data = json.load(f)
+                self._tesco_rates = data
+                if not loaded:
+                    self._empirical_rates = data.get('domain_rates_for_synthetic', {})
+                    self._empirical_source = 'tesco'
+                loaded = True
+                print(f"Loaded Tesco rates from {tesco_path}")
+
+        if nsch_path and Path(nsch_path).exists():
+            with open(nsch_path) as f:
+                self._nsch_stats = json.load(f)
+                loaded = True
+                print(f"Loaded NSCH population stats from {nsch_path}")
+
+        return loaded
+
+    @property
+    def multiplier_noise_sigma(self) -> float:
+        """Get the noise sigma for delay multipliers."""
+        return getattr(self, '_multiplier_noise_sigma', 0.3)
+
+    @multiplier_noise_sigma.setter
+    def multiplier_noise_sigma(self, value: float):
+        """Set the noise sigma for delay multipliers."""
+        self._multiplier_noise_sigma = value
 
     def _get_baseline_purchase_rate(self, child_age_months: int, domain: str) -> float:
         """Get baseline monthly purchase rate for a domain given child age.
@@ -227,6 +334,9 @@ class SyntheticDataGenerator:
     def _get_delay_purchase_multiplier(self, delay_type: str, domain: str, months_since_onset: int) -> float:
         """Get purchase rate multiplier for a delay type and domain.
         
+        Tries to use empirical multipliers from PSID-CDS or Kaggle ASD data.
+        Falls back to hardcoded values with noise if empirical data unavailable.
+        
         Args:
             delay_type: Type of developmental delay
             domain: Developmental domain
@@ -238,8 +348,38 @@ class SyntheticDataGenerator:
         # Gradual increase after onset
         ramp_factor = min(months_since_onset / 6.0, 1.0)
         
-        # Domain-specific multipliers for each delay type
-        # TODO: Replace with empirical multipliers from PSID-CDS validation
+        # Try to get empirical multiplier from PSID correlations
+        if hasattr(self, '_psid_correlations') and self._psid_correlations:
+            corr_key = f"{delay_type}_{domain}"
+            if corr_key in self._psid_correlations:
+                corr = self._psid_correlations[corr_key]
+                # Convert correlation to multiplier (rough approximation)
+                # Higher correlation = higher multiplier
+                base_multiplier = 1.0 + abs(corr.get('correlation', 0)) * 3.0
+                noisy_multiplier = base_multiplier * np.random.normal(1.0, self.multiplier_noise_sigma)
+                noisy_multiplier = np.clip(noisy_multiplier, 0.5, base_multiplier * 1.5)
+                return 1.0 + (noisy_multiplier - 1.0) * ramp_factor
+
+        # Try Kaggle ASD question importance for ASD-specific domains
+        if delay_type == 'asd' and hasattr(self, '_asd_question_importance'):
+            # Map domains to AQ-10 questions
+            domain_to_question = {
+                'social_emotional': 'q1',
+                'language': 'q4',
+                'sensory': 'q5',
+                'behavioral': 'q7',
+            }
+            q = domain_to_question.get(domain)
+            if q and q in self._asd_question_importance:
+                effect = abs(self._asd_question_importance[q].get('effect_size', 0))
+                # Convert effect size to multiplier
+                base_multiplier = 1.0 + effect * 2.0
+                noisy_multiplier = base_multiplier * np.random.normal(1.0, self.multiplier_noise_sigma)
+                noisy_multiplier = np.clip(noisy_multiplier, 0.5, base_multiplier * 1.5)
+                return 1.0 + (noisy_multiplier - 1.0) * ramp_factor
+
+        # Hardcoded fallback multipliers
+        # WARNING: These encode the signal the model will detect (circularity)
         multipliers = {
             'language': {
                 'language': 3.0,
@@ -270,8 +410,8 @@ class SyntheticDataGenerator:
         }
         
         base_multiplier = multipliers.get(delay_type, {}).get(domain, 1.0)
-        # Add Gaussian noise to avoid perfectly deterministic signal
-        noisy_multiplier = base_multiplier * np.random.normal(1.0, 0.3)
+        # Add Gaussian noise to reduce circularity
+        noisy_multiplier = base_multiplier * np.random.normal(1.0, self.multiplier_noise_sigma)
         noisy_multiplier = np.clip(noisy_multiplier, 0.5, base_multiplier * 1.5)
         return 1.0 + (noisy_multiplier - 1.0) * ramp_factor
     

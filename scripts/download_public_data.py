@@ -71,6 +71,41 @@ DATASETS = {
             '5. Place in data/raw/ as psid_family.csv and psid_cds.csv'
         ),
     },
+    'instacart': {
+        'name': 'Instacart Market Basket Analysis',
+        'url': 'https://www.kaggle.com/c/instacart-market-basket-analysis/data',
+        'files': ['instacart/'],  # directory with orders.csv, products.csv, etc.
+        'instructions': (
+            '1. Visit the URL above (requires Kaggle account)\n'
+            '2. Download all CSV files from the competition data\n'
+            '3. Extract and place in data/raw/instacart/\n'
+            '   (should contain orders.csv, products.csv, departments.csv,\n'
+            '    aisles.csv, order_products__prior.csv, order_products__train.csv)'
+        ),
+    },
+    'tesco': {
+        'name': 'Tesco Grocery 1.0',
+        'url': 'https://www.kaggle.com/datasets/tesco/tesco-grocery-1-0',
+        'files': ['tesco/'],  # directory with area_data.csv
+        'instructions': (
+            '1. Visit the URL above (requires Kaggle account)\n'
+            '2. Download the dataset CSV files\n'
+            '3. Extract and place in data/raw/tesco/\n'
+            '   (should contain area_data.csv or similar)'
+        ),
+    },
+    'kaggle_asd': {
+        'name': 'Kaggle ASD Screening Datasets',
+        'url': 'https://www.kaggle.com/datasets/andrewmvd/autism-screening-on-adults',
+        'files': ['kaggle_asd/'],  # directory with ASD screening CSVs
+        'instructions': (
+            '1. Download from multiple Kaggle sources:\n'
+            '   - Adults: https://www.kaggle.com/datasets/andrewmvd/autism-screening-on-adults\n'
+            '   - Toddlers: https://www.kaggle.com/datasets/fabdelja/autism-screening-for-toddlers\n'
+            '2. Extract CSV files to data/raw/kaggle_asd/\n'
+            '   (e.g., Autism-Adult-Data.csv, Toddler Autism dataset.csv)'
+        ),
+    },
 }
 
 
@@ -146,6 +181,30 @@ def check_data_availability(raw_dir: Path) -> dict:
         if not cds_path:
             missing.append('psid_cds.csv')
         status['psid'] = (False, f'Missing: {", ".join(missing)}')
+
+    # Instacart
+    instacart_dir = raw_dir / 'instacart'
+    orders_file = instacart_dir / 'orders.csv' if instacart_dir.exists() else None
+    if orders_file and orders_file.exists():
+        status['instacart'] = (True, str(instacart_dir))
+    else:
+        status['instacart'] = (False, 'instacart/ directory with orders.csv not found')
+
+    # Tesco
+    tesco_dir = raw_dir / 'tesco'
+    tesco_files = list(tesco_dir.glob('*.csv')) if tesco_dir.exists() else []
+    if tesco_files:
+        status['tesco'] = (True, str(tesco_dir))
+    else:
+        status['tesco'] = (False, 'tesco/ directory with CSV files not found')
+
+    # Kaggle ASD
+    asd_dir = raw_dir / 'kaggle_asd'
+    asd_files = list(asd_dir.glob('*.csv')) if asd_dir.exists() else []
+    if asd_files:
+        status['kaggle_asd'] = (True, str(asd_dir))
+    else:
+        status['kaggle_asd'] = (False, 'kaggle_asd/ directory with CSV files not found')
 
     return status
 
@@ -241,6 +300,51 @@ def process_psid(raw_dir: Path, output_dir: Path, status: dict):
     print(f'✓ PSID-CDS processed → {output_dir}/psid_*.json')
 
 
+def process_instacart(raw_dir: Path, output_dir: Path, status: dict):
+    """Load and process Instacart data."""
+    if not status['instacart'][0]:
+        print(f'\n⚠ Skipping Instacart: {status["instacart"][1]}')
+        return
+
+    from src.data.instacart_loader import InstacartLoader
+
+    instacart_dir = status['instacart'][1]
+    loader = InstacartLoader(instacart_dir, sample_frac=0.1)  # Sample for speed
+    if loader.load():
+        loader.save_purchase_rates(str(output_dir / 'instacart_rates.json'))
+        print(f'✓ Instacart processed → {output_dir}/instacart_rates.json')
+
+
+def process_tesco(raw_dir: Path, output_dir: Path, status: dict):
+    """Load and process Tesco data."""
+    if not status['tesco'][0]:
+        print(f'\n⚠ Skipping Tesco: {status["tesco"][1]}')
+        return
+
+    from src.data.tesco_loader import TescoLoader
+
+    tesco_dir = status['tesco'][1]
+    loader = TescoLoader(tesco_dir)
+    if loader.load():
+        loader.save_rates(str(output_dir / 'tesco_rates.json'))
+        print(f'✓ Tesco processed → {output_dir}/tesco_rates.json')
+
+
+def process_kaggle_asd(raw_dir: Path, output_dir: Path, status: dict):
+    """Load and process Kaggle ASD data."""
+    if not status['kaggle_asd'][0]:
+        print(f'\n⚠ Skipping Kaggle ASD: {status["kaggle_asd"][1]}')
+        return
+
+    from src.data.kaggle_asd_loader import KaggleASDLoader
+
+    asd_dir = status['kaggle_asd'][1]
+    loader = KaggleASDLoader(asd_dir)
+    if loader.load():
+        loader.save_processed(str(output_dir / 'kaggle_asd_processed.json'))
+        print(f'✓ Kaggle ASD processed → {output_dir}/kaggle_asd_*.json/csv')
+
+
 def print_summary(status: dict, output_dir: Path):
     """Print processing summary."""
     print('\n' + '=' * 80)
@@ -311,6 +415,9 @@ def main():
     process_ce(raw_dir, output_dir, status)
     process_amazon(raw_dir, output_dir, status)
     process_psid(raw_dir, output_dir, status)
+    process_instacart(raw_dir, output_dir, status)
+    process_tesco(raw_dir, output_dir, status)
+    process_kaggle_asd(raw_dir, output_dir, status)
 
     print_summary(status, output_dir)
 

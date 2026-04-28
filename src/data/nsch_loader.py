@@ -329,3 +329,208 @@ class NSCHLoader:
             'asd': float((df['delay_type'] == 'asd').sum() / n),
             'adhd': float((df['delay_type'] == 'adhd').sum() / n),
         }
+
+    def get_population_statistics(self) -> Dict[str, Dict]:
+        """Return comprehensive population statistics for validation.
+
+        Returns:
+            Dict with demographic distributions, prevalence by group,
+            and diagnosis age statistics for real validation metrics.
+        """
+        if self.processed_df is None:
+            raise RuntimeError("Call load() first")
+
+        df = self.processed_df
+        n = len(df)
+
+        stats = {
+            'sample_size': n,
+            'prevalence': self.get_delay_prevalence_rates(),
+            'demographics': {},
+            'diagnosis_age': {},
+            'co_occurrence': {},
+        }
+
+        # Demographic distributions
+        for attr in ['income_quintile', 'geography', 'ethnicity']:
+            dist = df[attr].value_counts(normalize=True).to_dict()
+            stats['demographics'][attr] = {str(k): float(v) for k, v in dist.items()}
+
+        # Prevalence by demographic group
+        stats['prevalence_by_group'] = self.get_prevalence_by_demographic()
+
+        # Diagnosis age statistics by condition
+        for dtype in ['language', 'motor', 'asd', 'adhd']:
+            ages = self.get_diagnosis_age_distribution(dtype)
+            if len(ages) > 0:
+                stats['diagnosis_age'][dtype] = {
+                    'mean_months': float(np.mean(ages)),
+                    'median_months': float(np.median(ages)),
+                    'std_months': float(np.std(ages)),
+                    'p25_months': float(np.percentile(ages, 25)),
+                    'p75_months': float(np.percentile(ages, 75)),
+                    'n': int(len(ages)),
+                }
+
+        # Age distribution of sample
+        if 'child_age_months' in df.columns:
+            ages = df['child_age_months'].dropna()
+            stats['age_distribution'] = {
+                'mean_months': float(ages.mean()),
+                'std_months': float(ages.std()),
+                'min_months': float(ages.min()),
+                'max_months': float(ages.max()),
+            }
+
+        # Gender distribution if available
+        if 'SC_SEX' in self.raw_df.columns:
+            sex_dist = self.raw_df['SC_SEX'].value_counts(normalize=True)
+            stats['demographics']['gender'] = {
+                'male': float(sex_dist.get(1, 0)),
+                'female': float(sex_dist.get(2, 0)),
+            }
+
+            # Prevalence by gender
+            for sex_code, sex_label in [(1, 'male'), (2, 'female')]:
+                mask = self.raw_df['SC_SEX'] == sex_code
+                if mask.sum() > 0:
+                    sub_df = df.loc[mask]
+                    stats['prevalence_by_group'].setdefault('gender', {})[sex_label] = \
+                        float(sub_df['has_delay'].mean())
+
+        return stats
+
+    def get_reference_prevalence_for_validation(self) -> Dict[str, Dict]:
+        """Return reference prevalence rates for model validation.
+
+        These rates serve as ground truth for comparing model predictions
+        against real population statistics.
+
+        Returns:
+            Dict with overall and stratified prevalence rates
+        """
+        if self.processed_df is None:
+            raise RuntimeError("Call load() first")
+
+        df = self.processed_df
+
+        reference = {
+            'overall': {
+                'any_delay': float(df['has_delay'].mean()),
+                'by_type': {},
+            },
+            'by_income': {},
+            'by_geography': {},
+            'by_ethnicity': {},
+            'confidence_intervals': {},
+        }
+
+        # By delay type
+        for dtype in ['language', 'motor', 'asd', 'adhd']:
+            count = (df['delay_type'] == dtype).sum()
+            rate = count / len(df)
+            reference['overall']['by_type'][dtype] = {
+                'prevalence': float(rate),
+                'n': int(count),
+            }
+
+        # Stratified prevalence with confidence intervals
+        for attr, key in [('income_quintile', 'by_income'),
+                          ('geography', 'by_geography'),
+                          ('ethnicity', 'by_ethnicity')]:
+            for group in df[attr].unique():
+                sub = df[df[attr] == group]
+                n = len(sub)
+                p = sub['has_delay'].mean()
+                # Wilson score interval for 95% CI
+                z = 1.96
+                denom = 1 + z**2 / n
+                center = (p + z**2 / (2*n)) / denom
+                margin = z * np.sqrt((p*(1-p) + z**2/(4*n)) / n) / denom
+
+                reference[key][str(group)] = {
+                    'prevalence': float(p),
+                    'n': int(n),
+                    'ci_lower': float(max(0, center - margin)),
+                    'ci_upper': float(min(1, center + margin)),
+                }
+
+        return reference
+
+    def compare_with_model_predictions(self, predictions: pd.DataFrame,
+                                        pred_col: str = 'predicted_delay',
+                                        group_col: Optional[str] = None) -> Dict[str, Dict]:
+        """Compare model predictions against NSCH population statistics.
+
+        Args:
+            predictions: DataFrame with model predictions
+            pred_col: Column name for predicted delay probability/label
+            group_col: Optional column for stratified comparison
+
+        Returns:
+            Dict with comparison metrics (bias, calibration, etc.)
+        """
+        if self.processed_df is None:
+            raise RuntimeError("Call load() first")
+
+        reference = self.get_reference_prevalence_for_validation()
+        
+        comparison = {
+            'overall': {},
+            'by_group': {},
+            'calibration': {},
+        }
+
+        # Overall comparison
+        pred_rate = predictions[pred_col].mean()
+        true_rate = reference['overall']['any_delay']
+        comparison['overall'] = {
+            'predicted_prevalence': float(pred_rate),
+            'nsch_prevalence': float(true_rate),
+            'absolute_bias': float(pred_rate - true_rate),
+            'relative_bias': float((pred_rate - true_rate) / true_rate) if true_rate > 0 else None,
+        }
+
+        # Stratified comparison if group column provided
+        if group_col and group_col in predictions.columns:
+            for group in predictions[group_col].unique():
+                sub = predictions[predictions[group_col] == group]
+                pred_rate_g = sub[pred_col].mean()
+
+                # Find matching NSCH reference
+                nsch_rate_g = None
+                for ref_key in ['by_income', 'by_geography', 'by_ethnicity']:
+                    if str(group) in reference.get(ref_key, {}):
+                        nsch_rate_g = reference[ref_key][str(group)]['prevalence']
+                        break
+
+                comparison['by_group'][str(group)] = {
+                    'predicted_prevalence': float(pred_rate_g),
+                    'nsch_prevalence': float(nsch_rate_g) if nsch_rate_g else None,
+                    'n': int(len(sub)),
+                }
+
+        return comparison
+
+    def save_population_statistics(self, output_path: str):
+        """Save population statistics to JSON for validation scripts.
+
+        Args:
+            output_path: Path to save JSON file
+        """
+        import json
+        from pathlib import Path
+
+        stats = self.get_population_statistics()
+        stats['reference_prevalence'] = self.get_reference_prevalence_for_validation()
+        stats['metadata'] = {
+            'source': 'NSCH (National Survey of Children\'s Health)',
+            'url': 'https://www.census.gov/programs-surveys/nsch/data/datasets.html',
+            'file': str(self.path),
+        }
+
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        with open(output_path, 'w') as f:
+            json.dump(stats, f, indent=2)
+
+        print(f"Saved NSCH population statistics to {output_path}")
