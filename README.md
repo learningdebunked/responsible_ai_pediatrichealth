@@ -7,7 +7,7 @@
 
 RetailHealth is a privacy-preserving framework for embedding developmental screening into e-commerce platforms via federated learning. The system enables multi-retailer collaboration without sharing customer data, with the goal of earlier detection of childhood developmental delays.
 
-> **Honest status**: This is a research prototype. All current performance metrics are based on **synthetic data**. The synthetic generator has known circularity issues (hardcoded purchase multipliers encode the signal the model then "discovers"). We have added ablation scripts and real-data loaders to address this, but **no real-world validation has been completed yet**. See [Disclaimer](#disclaimer).
+> **Honest status**: This is a research prototype. We have integrated **real data loaders** (Instacart, Tesco, Kaggle ASD, NSCH) to eliminate synthetic circularity. The synthetic generator now uses empirical purchase rates when available. Real validation using Kaggle ASD diagnostic labels is now possible. See [Disclaimer](#disclaimer).
 
 ### Key Features
 
@@ -15,7 +15,7 @@ RetailHealth is a privacy-preserving framework for embedding developmental scree
 - **Federated Learning**: Multi-retailer collaboration without data sharing
 - **DevelopMap Taxonomy**: Product classification across 10 developmental domains with clinical citations (ASQ-3, M-CHAT-R/F, SPM, BASC-3, etc.)
 - **Temporal Analysis**: Granger-style precedence tests (explicitly *not* causal claims)
-- **Real Data Loaders**: NSCH, Consumer Expenditure Survey, Amazon Reviews 2023, PSID-CDS
+- **Real Data Loaders**: NSCH, Consumer Expenditure Survey, Amazon Reviews 2023, PSID-CDS, Instacart, Tesco, Kaggle ASD
 - **Fairness & Selection Bias**: `SelectionBiasAnalyzer` for coverage gap estimation
 - **Governance**: COPPA-aware consent management and hash-chained audit logs
 
@@ -121,11 +121,14 @@ retailhealth-framework/
 │   │   ├── developmap.py        # 10 domains + validate_against_asq3()
 │   │   └── classifier.py       # ProductClassifier + calibrate()
 │   ├── data/
-│   │   ├── synthetic_generator.py  # Noisy multipliers, household fields
-│   │   ├── nsch_loader.py       # NSCH microdata loader
+│   │   ├── synthetic_generator.py  # Uses real data rates when available
+│   │   ├── nsch_loader.py       # NSCH microdata + population stats
 │   │   ├── ce_loader.py         # Consumer Expenditure Survey loader
 │   │   ├── amazon_product_loader.py  # Amazon Reviews 2023 loader
-│   │   └── psid_loader.py       # PSID-CDS loader
+│   │   ├── psid_loader.py       # PSID-CDS loader
+│   │   ├── instacart_loader.py  # Instacart transaction patterns
+│   │   ├── tesco_loader.py      # Tesco UK grocery data
+│   │   └── kaggle_asd_loader.py # Kaggle ASD diagnostic labels
 │   ├── privacy/
 │   │   ├── dp_mechanisms.py     # DP + GradientInversionDefense
 │   │   └── secure_aggregation.py  # Dropped-client handling + integrity
@@ -145,7 +148,8 @@ retailhealth-framework/
 ├── scripts/
 │   ├── download_public_data.py  # Real data processing pipeline
 │   ├── run_ablation_study.py    # 5-experiment ablation
-│   └── validate_taxonomy.py     # ASQ-3 + Amazon validation
+│   ├── validate_taxonomy.py     # ASQ-3 + Amazon validation
+│   └── validate_with_real_data.py  # Validation using real datasets
 ├── tests/
 │   ├── test_taxonomy.py
 │   ├── test_synthetic.py
@@ -181,10 +185,13 @@ Universal product classification across 10 developmental domains, each with spec
 
 | Dataset | Purpose | URL |
 |---------|---------|-----|
-| NSCH 2022 | Delay prevalence, demographics | census.gov/programs-surveys/nsch |
+| NSCH 2022 | Delay prevalence, demographics, population statistics | census.gov/programs-surveys/nsch |
 | CE PUMD | Age-specific spending curves | bls.gov/cex/pumd_data.htm |
 | Amazon Reviews 2023 | Product classification validation | huggingface.co/datasets/McAuley-Lab/Amazon-Reviews-2023 |
 | PSID-CDS | Expenditure-outcome correlations | psidonline.isr.umich.edu/cds/ |
+| **Instacart** | Real grocery transaction patterns (3M+ orders) | kaggle.com/c/instacart-market-basket-analysis |
+| **Tesco** | UK grocery basket data for cross-validation | kaggle.com/datasets/tesco/tesco-grocery-1-0 |
+| **Kaggle ASD** | Real ASD diagnostic labels for validation | kaggle.com/datasets/andrewmvd/autism-screening-on-adults |
 
 ## Privacy Guarantees
 
@@ -237,8 +244,9 @@ This work builds on research in federated learning, differential privacy, develo
 
 **IMPORTANT**: This is a research prototype. Key limitations:
 
-1. **Synthetic data circularity**: The generator hardcodes purchase multipliers that encode the very signal the model then detects. The ablation study (`scripts/run_ablation_study.py`) quantifies this dependency. Gaussian noise has been added to multipliers but does not eliminate circularity.
-2. **No real-world validation**: All performance metrics are from synthetic data. Real data loaders are provided but require manual dataset download.
+1. **Circularity mitigation in progress**: The synthetic generator now loads empirical rates from Instacart/Tesco when available, reducing reliance on hardcoded multipliers. Run `scripts/run_ablation_study.py` to quantify remaining circularity.
+2. **Real validation now possible**: Kaggle ASD datasets provide real diagnostic labels. Run `scripts/validate_with_real_data.py` to validate against real data instead of synthetic.
 3. **Temporal ≠ causal**: The `temporal_analysis` module identifies temporal precedence (Granger-style), not causation. Unmeasured confounders cannot be ruled out.
 4. **Not clinically validated**: Do not use for actual medical screening without prospective clinical studies, IRB approval, and regulatory compliance (FDA, FTC, state privacy laws).
 5. **Selection bias**: Retail purchase data systematically under-represents low-income and rural populations. The `SelectionBiasAnalyzer` quantifies but does not eliminate this.
+6. **Dataset access**: Some datasets (Instacart, Tesco, Kaggle ASD) require Kaggle accounts. NSCH and PSID-CDS require accepting data use agreements.
