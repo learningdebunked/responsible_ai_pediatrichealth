@@ -18,7 +18,7 @@ PrenatalSentinel integrates three publicly available prenatal signals — grocer
 | SES / Food Desert | USDA FARA 2019 + NSCH 2020–22 | food desert score, SES quintile, urban flag |
 
 **Key Results (N=5,000 synthetic cohort):**
-- FL + DP (ε=1): **AUC = 0.685** — outperforms centralized LR baseline (0.672)
+- FL + DP (ε=1): **AUC = 0.686, F1 = 0.203** — outperforms centralized LR baseline (AUC 0.672, F1 0.201) with class-weighted federated gradients (fixes prior F1=0.0 collapse at threshold 0.5)
 - Flat privacy-utility curve across ε ∈ {1, 5, 10, ∞}
 - Equity gap: high food desert AUC = 0.607 vs. low food desert = 0.628 (3.3%)
 - Best signal config: F+M+E (food + OTC + SES) → AUC = 0.650
@@ -77,6 +77,28 @@ python code/generate_figures.py
   note    = {Submitted}
 }
 ```
+
+---
+
+## Changelog
+
+**2026-07-09 — Ajit Kumar Sahu **
+
+- **Fixed federated learning class-imbalance bug**: the FL model previously predicted the majority class for every case at the standard 0.5 threshold (F1 = Precision = Recall = 0.0 at every privacy budget ε), despite reporting a competitive AUC. Added per-client class-weighted gradients (`code/pipeline.py`) so the FL model now correctly recalls 71% of ASD cases. Result: AUC 0.685 → **0.686**, F1 0.0 → **0.203** at all ε ∈ {1, 5, 10, ∞}.
+- **Fixed ROC curve truncation bug** in Fig. 2 and Fig. 5: only the first 100 raw threshold points were saved instead of being resampled across the full FPR range, so curves never reached (1,1). Replaced with a fixed-grid interpolation (`roc_grid()` in `code/pipeline.py`); Fig. 5 now shows full, correctly-terminating ROC curves.
+- Fixed hardcoded sandbox file paths (`/home/sandbox/...`) in `code/pipeline.py` and `code/generate_figures.py` so the pipeline runs locally/anywhere.
+- Regenerated `figures/fig2_privacy_utility.png` and `figures/fig5_roc_curves.png` to reflect the above fixes. `figures/fig3_equity_audit.png` and `figures/fig4_ablation.png` were intentionally left unchanged (matching the currently-submitted PDF) since their minor numeric drift traced to scikit-learn version differences, not a real bug.
+- Fixed an internal inconsistency in the paper: Introduction Contribution C5 stated a "10.2% AUC gap" while the Abstract, Results, Discussion, and Conclusion all correctly state **3.3%**.
+- **Citation integrity pass** on `paper/ieee_autism_multimodal_paper.tex` / `paper/references.bib`: verified every citation against real sources via web research.
+  - Corrected 3 citations that had fabricated/placeholder DOIs or arXiv IDs (`alshammari2024explainable`, `mohammadifar2023federated`) or were entirely unverifiable (`islam2025multimodal`, replaced with a verified real paper by Singh & Rahman 2025).
+  - Removed one unverifiable citation (`amebleh2025privacy`) with no evidence the paper or authors exist.
+  - Fixed a misattributed statistic: the "$461 billion" annual ASD cost figure was cited to Buescher et al. 2014 (which reports per-patient lifetime costs, not a national annual figure); added the correct source (Leigh & Du, 2015).
+  - Corrected a folic-acid/ASD risk-reduction claim (`guo2020prenatal` → `liu2021folicacid`) to cite the real underlying meta-analysis with accurate effect sizes.
+  - Corrected the journal/title metadata for `panjwani2021food` to match the real paper.
+- Fixed Table I (baseline classifiers) to match Fig. 5 / `data/results.json` (Gradient Boosting AUC 0.634 → 0.636; Precision values corrected) — both stemmed from the same re-run needed for the ROC curve fix.
+- Updated Table II (FL results) with the corrected AUC/F1 values and a new F1 column; updated the Abstract, Discussion, and Conclusion to match.
+- Added a **Declarations** section to the paper (Conflict of Interest, Funding, Data Availability, Author Contributions, Generative AI Usage Disclosure) — previously missing, required for IEEE JBHI submission.
+- **Not yet resolved**: the self-citation `poreddy2024foodmedicine` could not be independently verified and needs author confirmation. The paper has not been recompiled to PDF in this environment (no LaTeX toolchain available) — recompile before submitting.
 
 ---
 

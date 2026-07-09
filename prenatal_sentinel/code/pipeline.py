@@ -14,6 +14,14 @@ import warnings; warnings.filterwarnings('ignore')
 np.random.seed(42)
 N = 5000
 
+def roc_grid(y_true, y_score, n_points=100):
+    """Interpolate ROC curve onto a fixed FPR grid spanning [0,1] so the
+    saved curve is compact but still terminates at (1,1)."""
+    fpr, tpr, _ = roc_curve(y_true, y_score)
+    grid = np.linspace(0, 1, n_points)
+    tpr_i = np.interp(grid, fpr, tpr)
+    return grid, tpr_i
+
 # ── Generate dataset ──────────────────────────────────────────────────────
 rng = np.random.default_rng(42)
 ses = rng.integers(1, 6, N)
@@ -49,7 +57,7 @@ print(f"Dataset: {N} samples, ASD rate={y.mean():.3f} ({y.sum()} cases)")
 print(f"Oracle AUC: {roc_auc_score(y, prob_asd):.4f}")
 
 # Save CSV
-with open('/home/sandbox/prenatal_sentinel_dataset.csv','w',newline='') as f:
+with open('../data/prenatal_sentinel_dataset.csv','w',newline='') as f:
     w=csv.writer(f); w.writerow(fn+['ses_quintile','urban_flag','asd_label'])
     for i in range(N):
         row=list(X[i])+[int(ses[i]),int(uf[i]),int(y[i])]
@@ -76,8 +84,8 @@ for name, model in models.items():
     auc=roc_auc_score(y,yp); f1=f1_score(y,ypred,zero_division=0)
     prec=precision_score(y,ypred,zero_division=0); rec=recall_score(y,ypred,zero_division=0)
     ap=average_precision_score(y,yp)
-    fpr,tpr,_=roc_curve(y,yp)
-    roc_data[name]={'fpr':fpr.tolist(),'tpr':tpr.tolist(),'auc':auc}
+    fpr_g,tpr_g=roc_grid(y,yp)
+    roc_data[name]={'fpr':fpr_g.tolist(),'tpr':tpr_g.tolist(),'auc':auc}
     baseline_results[name]={'AUC':round(auc,4),'F1':round(f1,4),
                              'Precision':round(prec,4),'Recall':round(rec,4),'AP':round(ap,4)}
     print(f"{name}: AUC={auc:.4f} F1={f1:.4f} P={prec:.4f} R={rec:.4f}")
@@ -95,8 +103,13 @@ def fl_dp(X, y, epsilon, n_clients=5, n_rounds=40, seed=42):
         lr=0.10/(1+0.03*rnd); wu,bu=[],[]
         for cidx in splits:
             Xc,yc=Xs[cidx],y[cidx]
-            err=sigmoid(Xc@w+b)-yc
-            gw=Xc.T@err/len(yc); gb=err.mean()
+            n_c=len(yc); n_pos=yc.sum(); n_neg=n_c-n_pos
+            if n_pos==0 or n_neg==0:
+                sw=np.ones(n_c)
+            else:
+                sw=np.where(yc==1, n_c/(2*n_pos), n_c/(2*n_neg))
+            err=(sigmoid(Xc@w+b)-yc)*sw
+            gw=Xc.T@err/sw.sum(); gb=err.sum()/sw.sum()
             gnorm=np.linalg.norm(gw)
             if gnorm>C: gw=gw*C/gnorm
             if epsilon<float('inf'):
@@ -110,9 +123,9 @@ def fl_dp(X, y, epsilon, n_clients=5, n_rounds=40, seed=42):
     f1=f1_score(y,ypred,zero_division=0)
     prec=precision_score(y,ypred,zero_division=0)
     rec=recall_score(y,ypred,zero_division=0)
-    fpr,tpr,_=roc_curve(y,yp)
+    fpr_g,tpr_g=roc_grid(y,yp)
     lbl=f'FL (ε={epsilon})' if epsilon<float('inf') else 'FL (No DP)'
-    roc_data[lbl]={'fpr':fpr.tolist(),'tpr':tpr.tolist(),'auc':auc}
+    roc_data[lbl]={'fpr':fpr_g.tolist(),'tpr':tpr_g.tolist(),'auc':auc}
     return {'AUC':round(auc,4),'F1':round(f1,4),'Precision':round(prec,4),
             'Recall':round(rec,4),'epsilon':epsilon if epsilon<float('inf') else 'inf',
             'n_clients':n_clients,'n_rounds':n_rounds}
@@ -191,7 +204,7 @@ results={
     'roc_curves':{k:{'fpr':v['fpr'][:100],'tpr':v['tpr'][:100],'auc':v['auc']}
                   for k,v in roc_data.items()}
 }
-with open('/home/sandbox/results.json','w') as f: json.dump(results,f,indent=2)
+with open('../data/results.json','w') as f: json.dump(results,f,indent=2)
 print(f"\n✅ Saved. ASD={y.mean():.3f} n_asd={y.sum()}")
 print(f"Best baseline: {max(v['AUC'] for v in baseline_results.values()):.4f}")
 print(f"FL no-DP: {fl_results.get('ε=∞ (No DP)',{}).get('AUC')}")

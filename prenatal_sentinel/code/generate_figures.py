@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from matplotlib.gridspec import GridSpec
 
-with open('/home/sandbox/results.json') as f:
+with open('../data/results.json') as f:
     R = json.load(f)
 
 COLORS = {
@@ -67,7 +67,7 @@ ax.legend(fontsize=9, loc='lower right')
 ax.grid(True, alpha=0.3, linestyle='--')
 ax.tick_params(labelsize=11)
 plt.tight_layout()
-plt.savefig('/home/sandbox/fig2_privacy_utility.png', dpi=150, bbox_inches='tight')
+plt.savefig('../figures/fig2_privacy_utility.png', dpi=150, bbox_inches='tight')
 plt.close()
 print("Fig 2 saved.")
 
@@ -113,7 +113,7 @@ ax2.tick_params(labelsize=10)
 fig.suptitle('Fig. 3: Equity Audit — PrenatalSentinel Performance Across Socioeconomic Strata',
              fontsize=11, y=1.02)
 plt.tight_layout()
-plt.savefig('/home/sandbox/fig3_equity_audit.png', dpi=150, bbox_inches='tight')
+plt.savefig('../figures/fig3_equity_audit.png', dpi=150, bbox_inches='tight')
 plt.close()
 print("Fig 3 saved.")
 
@@ -152,7 +152,7 @@ ax.legend(fontsize=10)
 ax.grid(True, axis='y', alpha=0.3, linestyle='--')
 ax.tick_params(labelsize=10)
 plt.tight_layout()
-plt.savefig('/home/sandbox/fig4_ablation.png', dpi=150, bbox_inches='tight')
+plt.savefig('../figures/fig4_ablation.png', dpi=150, bbox_inches='tight')
 plt.close()
 print("Fig 4 saved.")
 
@@ -210,7 +210,7 @@ ax2.tick_params(labelsize=10)
 fig.suptitle('Fig. 5: ROC Curves — PrenatalSentinel Baseline and Federated Models',
              fontsize=12, y=1.01)
 plt.tight_layout()
-plt.savefig('/home/sandbox/fig5_roc_curves.png', dpi=150, bbox_inches='tight')
+plt.savefig('../figures/fig5_roc_curves.png', dpi=150, bbox_inches='tight')
 plt.close()
 print("Fig 5 saved.")
 
